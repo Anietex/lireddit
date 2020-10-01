@@ -1,4 +1,5 @@
 import { InputType, Field } from "type-graphql";
+import {UserRole} from "../types";
 @InputType()
 export class UsernamePasswordInput {
   @Field()
@@ -7,4 +8,7 @@ export class UsernamePasswordInput {
   username: string;
   @Field()
   password: string;
+
+  @Field(() => [String])
+  roles: UserRole[]
 }

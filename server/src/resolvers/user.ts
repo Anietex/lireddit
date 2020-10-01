@@ -7,9 +7,9 @@ import {
   ObjectType,
   Query,
   FieldResolver,
-  Root,
+  Root, Subscription, PubSub, PubSubEngine
 } from "type-graphql";
-import { MyContext } from "../types";
+import {MyContext, UserRole} from "../types";
 import { User } from "../entities/User";
 import argon2 from "argon2";
 import { COOKIE_NAME, FORGET_PASSWORD_PREFIX } from "../constants";
@@ -18,6 +18,11 @@ import { validateRegister } from "../utils/validateRegister";
 import { sendEmail } from "../utils/sendEmail";
 import { v4 } from "uuid";
 import { getConnection } from "typeorm";
+// import {isAdmin} from "../middleware/isAdmin";
+
+
+
+
 
 @ObjectType()
 class FieldError {
@@ -50,9 +55,9 @@ export class UserResolver {
 
   @Mutation(() => UserResponse)
   async changePassword(
-    @Arg("token") token: string,
-    @Arg("newPassword") newPassword: string,
-    @Ctx() { redis, req }: MyContext
+      @Arg("token") token: string,
+      @Arg("newPassword") newPassword: string,
+      @Ctx() { redis, req }: MyContext
   ): Promise<UserResponse> {
     if (newPassword.length <= 2) {
       return {
@@ -64,6 +69,7 @@ export class UserResolver {
         ],
       };
     }
+
 
     const key = FORGET_PASSWORD_PREFIX + token;
     const userId = await redis.get(key);
@@ -93,10 +99,10 @@ export class UserResolver {
     }
 
     await User.update(
-      { id: userIdNum },
-      {
-        password: await argon2.hash(newPassword),
-      }
+        { id: userIdNum },
+        {
+          password: await argon2.hash(newPassword),
+        }
     );
 
     await redis.del(key);
@@ -107,10 +113,14 @@ export class UserResolver {
     return { user };
   }
 
+
+
+
+
   @Mutation(() => Boolean)
   async forgotPassword(
-    @Arg("email") email: string,
-    @Ctx() { redis }: MyContext
+      @Arg("email") email: string,
+      @Ctx() { redis }: MyContext
   ) {
     const user = await User.findOne({ where: { email } });
     if (!user) {
@@ -121,19 +131,30 @@ export class UserResolver {
     const token = v4();
 
     await redis.set(
-      FORGET_PASSWORD_PREFIX + token,
-      user.id,
-      "ex",
-      1000 * 60 * 60 * 24 * 3
+        FORGET_PASSWORD_PREFIX + token,
+        user.id,
+        "ex",
+        1000 * 60 * 60 * 24 * 3
     ); // 3 days
 
     await sendEmail(
-      email,
-      `<a href="http://localhost:3000/change-password/${token}">reset password</a>`
+        email,
+        `<a href="http://localhost:3000/change-password/${token}">reset password</a>`
     );
 
     return true;
   }
+  // @UseMiddleware(isAdmin)
+  @Subscription(() => [User],{
+    topics: 'USERS'
+  })
+  // @Query(() => [User])
+  async users() : Promise<User[]> {
+    return   await User.find();
+
+  }
+
+
 
   @Query(() => User, { nullable: true })
   me(@Ctx() { req }: MyContext) {
@@ -141,14 +162,58 @@ export class UserResolver {
     if (!req.session.userId) {
       return null;
     }
-
     return User.findOne(req.session.userId);
   }
 
   @Mutation(() => UserResponse)
+  async updateRole(
+      @Arg('user_id') userId: Number,
+      @Arg('roles', () => [String]) roles: UserRole[],
+      @PubSub() pubSub: PubSubEngine
+  ): Promise<UserResponse> {
+    try{
+      let result = await getConnection()
+          .createQueryBuilder()
+          .update(User)
+          .set({roles})
+          .where('id = :id', {
+            id: userId
+          }).returning("*")
+          .execute();
+
+      await pubSub.publish('USERS', null)
+
+      let user = await User.findOne(result.raw[0].id)
+
+      return {
+        user: user
+      }
+
+    }catch (e) {
+      return {
+        errors: [
+          {
+            field: 'user_id',
+            message: e.message
+          }
+        ]
+      }
+    }
+
+
+
+  }
+
+
+
+
+
+  @Mutation(() => UserResponse)
   async register(
-    @Arg("options") options: UsernamePasswordInput,
-    @Ctx() { req }: MyContext
+      @Arg("options") options: UsernamePasswordInput,
+      @Ctx() { req }: MyContext,
+      @PubSub() pubSub: PubSubEngine
+
   ): Promise<UserResponse> {
     const errors = validateRegister(options);
     if (errors) {
@@ -160,16 +225,18 @@ export class UserResolver {
     try {
       // User.create({}).save()
       const result = await getConnection()
-        .createQueryBuilder()
-        .insert()
-        .into(User)
-        .values({
-          username: options.username,
-          email: options.email,
-          password: hashedPassword,
-        })
-        .returning("*")
-        .execute();
+          .createQueryBuilder()
+          .insert()
+          .into(User)
+          .values({
+            username: options.username,
+            email: options.email,
+            password: hashedPassword,
+            roles: options.roles
+          })
+          .returning("*")
+          .execute();
+
       user = result.raw[0];
     } catch (err) {
       //|| err.detail.includes("already exists")) {
@@ -191,19 +258,21 @@ export class UserResolver {
     // keep them logged in
     req.session.userId = user.id;
 
+    await  pubSub.publish("USERS", null)
+
     return { user };
   }
 
   @Mutation(() => UserResponse)
   async login(
-    @Arg("usernameOrEmail") usernameOrEmail: string,
-    @Arg("password") password: string,
-    @Ctx() { req }: MyContext
+      @Arg("usernameOrEmail") usernameOrEmail: string,
+      @Arg("password") password: string,
+      @Ctx() { req }: MyContext
   ): Promise<UserResponse> {
     const user = await User.findOne(
-      usernameOrEmail.includes("@")
-        ? { where: { email: usernameOrEmail } }
-        : { where: { username: usernameOrEmail } }
+        usernameOrEmail.includes("@")
+            ? { where: { email: usernameOrEmail } }
+            : { where: { username: usernameOrEmail } }
     );
     if (!user) {
       return {
@@ -237,16 +306,16 @@ export class UserResolver {
   @Mutation(() => Boolean)
   logout(@Ctx() { req, res }: MyContext) {
     return new Promise((resolve) =>
-      req.session.destroy((err) => {
-        res.clearCookie(COOKIE_NAME);
-        if (err) {
-          console.log(err);
-          resolve(false);
-          return;
-        }
+        req.session.destroy((err) => {
+          res.clearCookie(COOKIE_NAME);
+          if (err) {
+            console.log(err);
+            resolve(false);
+            return;
+          }
 
-        resolve(true);
-      })
+          resolve(true);
+        })
     );
   }
 }

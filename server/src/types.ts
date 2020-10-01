@@ -3,6 +3,7 @@ import { Redis } from "ioredis";
 import { createUserLoader } from "./utils/createUserLoader";
 import { createUpdootLoader } from "./utils/createUpdootLoader";
 
+
 export type MyContext = {
   req: Request & { session: Express.Session };
   redis: Redis;
@@ -10,3 +11,10 @@ export type MyContext = {
   userLoader: ReturnType<typeof createUserLoader>;
   updootLoader: ReturnType<typeof createUpdootLoader>;
 };
+
+
+export enum UserRole {
+  ADMIN = "admin",
+  Author = "author",
+  USER = "user"
+}

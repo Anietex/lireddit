@@ -10,6 +10,8 @@ import {
 } from "typeorm";
 import { Post } from "./Post";
 import { Updoot } from "./Updoot";
+import {UserRole} from "../types";
+
 
 @ObjectType()
 @Entity()
@@ -28,6 +30,16 @@ export class User extends BaseEntity {
 
   @Column()
   password!: string;
+
+  @Field(() => [UserRole])
+  @Column( {
+        array: true,
+        type: "enum",
+        enum: UserRole,
+        default: [UserRole.USER]
+      }
+  )
+  roles!: UserRole[];
 
   @OneToMany(() => Post, (post) => post.creator)
   posts: Post[];
