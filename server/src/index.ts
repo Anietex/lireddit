@@ -32,7 +32,7 @@ registerEnumType(UserRole, {
 
 
 const main = async () => {
-   let conn =   await createConnection({
+    await createConnection({
         type: "postgres",
         url: process.env.DATABASE_URL,
         logging: true,
